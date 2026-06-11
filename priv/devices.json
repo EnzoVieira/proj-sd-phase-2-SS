@@ -1,0 +1,7 @@
+[
+  {"id": "car-001",   "password": "pass1", "type": "car"},
+  {"id": "car-002",   "password": "pass2", "type": "car"},
+  {"id": "drone-001", "password": "pass3", "type": "drone"},
+  {"id": "drone-002", "password": "pass4", "type": "drone"},
+  {"id": "truck-001", "password": "pass5", "type": "truck"}
+]

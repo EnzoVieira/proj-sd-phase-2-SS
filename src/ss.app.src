@@ -1,0 +1,16 @@
+%% Ficheiro de aplicação OTP do SS.
+%% Descreve a aplicação: versão, módulos, dependências e como arrancar.
+{application, ss,
+ [{description, "Servidor de Sessao (SS)"},
+  {vsn, "0.1.0"},
+  {modules, [ss_app, ss_sup, ss_registry, ss_state, ss_pubsub, ss_cluster,
+             ss_crdt, ss_tcp, ss_conn, ss_json, ss_client]},
+  {registered, [ss_sup, ss_registry, ss_state, ss_pubsub, ss_cluster]},
+  %% Aplicações OTP de que dependemos (sempre presentes).
+  {applications, [kernel, stdlib]},
+  %% Módulo de arranque: o OTP chama ss_app:start/2.
+  {mod, {ss_app, []}},
+  %% Variáveis de configuração lidas com application:get_env/2.
+  %%   zone/peers são sobrepostas por nó no arranque (multi-nó).
+  {env, [{port, 9000}, {zone, undefined}, {peers, []}, {gossip_interval, 500}]}
+ ]}.

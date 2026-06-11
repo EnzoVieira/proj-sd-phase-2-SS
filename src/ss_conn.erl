@@ -1,0 +1,258 @@
+%%%-------------------------------------------------------------------
+%%% ss_conn — Tratamento de UMA ligação de cliente (Fases 1C + 2B)
+%%%
+%%% Um processo destes por ligação. Lê linhas JSON, despacha pelo campo "cmd",
+%%% e responde. Mantém o estado da SESSÃO nos argumentos de loop/2.
+%%%
+%%% Comandos:
+%%%   auth_producer / auth_consumer            (registo/autenticação)
+%%%   event                                    (produtor envia evento)
+%%%   online_count / online_count_by_type /
+%%%   is_online / active_count                 (consumidor faz queries)
+%%%
+%%% Respostas:
+%%%   sucesso sem dados : {"status":"ok"}
+%%%   sucesso com dados : {"status":"ok","result":{...}}
+%%%   erro              : {"error":"<msg>","code":<N>}
+%%%-------------------------------------------------------------------
+-module(ss_conn).
+-export([start/1]).
+
+start(Socket) ->
+    spawn(fun() -> init(Socket) end).
+
+init(Socket) ->
+    Session = #{authenticated => false, role => undefined, device_id => undefined},
+    loop(Socket, Session).
+
+loop(Socket, Session) ->
+    case gen_tcp:recv(Socket, 0) of
+        {ok, Line} ->
+            {Response, NewSession} = handle_line(Socket, Line, Session),
+            gen_tcp:send(Socket, [Response, "\n"]),
+            loop(Socket, NewSession);
+        {error, closed} ->
+            %% O processo termina aqui. O monitor no ss_state deteta a morte e
+            %% marca o dispositivo offline automaticamente (não fazemos nada).
+            io:format("[ss_conn] cliente desligou~n"),
+            ok
+    end.
+
+%%====================================================================
+%% Tratamento de uma linha
+%%====================================================================
+
+handle_line(Socket, Line, Session) ->
+    case safe_decode(Line) of
+        {ok, Map} when is_map(Map) -> dispatch(Socket, Map, Session);
+        _ -> {error_resp(400, <<"Invalid JSON">>), Session}
+    end.
+
+safe_decode(Line) ->
+    try {ok, ss_json:decode(Line)}
+    catch _:_ -> error
+    end.
+
+dispatch(Socket, Map, Session) ->
+    case maps:get(<<"cmd">>, Map, undefined) of
+        undefined -> {error_resp(400, <<"Missing 'cmd' field">>), Session};
+        Cmd       -> route(Socket, Cmd, Map, Session)
+    end.
+
+%% A maioria dos handlers ignora o Socket; subscribe/unsubscribe precisam dele.
+route(_S, <<"auth_producer">>, Map, Session)        -> handle_auth_producer(Map, Session);
+route(_S, <<"auth_consumer">>, Map, Session)        -> handle_auth_consumer(Map, Session);
+route(_S, <<"event">>, Map, Session)                -> handle_event(Map, Session);
+route(_S, <<"online_count">>, Map, Session)         -> handle_online_count(Map, Session);
+route(_S, <<"online_count_by_type">>, Map, Session) -> handle_online_count_by_type(Map, Session);
+route(_S, <<"is_online">>, Map, Session)            -> handle_is_online(Map, Session);
+route(_S, <<"active_count">>, Map, Session)         -> handle_active_count(Map, Session);
+route(S,  <<"subscribe">>, Map, Session)            -> handle_subscribe(S, Map, Session);
+route(_S, <<"unsubscribe">>, Map, Session)          -> handle_unsubscribe(Map, Session);
+route(_S, Cmd, _Map, Session) when is_binary(Cmd)   -> {error_resp(400, <<"Unknown command: ", Cmd/binary>>), Session};
+route(_S, _Cmd, _Map, Session)                      -> {error_resp(400, <<"Invalid 'cmd' field">>), Session}.
+
+%%====================================================================
+%% Handlers — autenticação
+%%====================================================================
+
+handle_auth_producer(Map, Session) ->
+    case maps:get(authenticated, Session) of
+        true ->
+            {error_resp(409, <<"already_authenticated">>), Session};
+        false ->
+            Device   = maps:get(<<"device">>, Map, undefined),
+            Password = maps:get(<<"password">>, Map, undefined),
+            case is_binary(Device) andalso is_binary(Password) of
+                false ->
+                    {error_resp(400, <<"invalid">>), Session};
+                true ->
+                    case ss_registry:authenticate_device(Device, Password) of
+                        true ->
+                            %% Marca online: passa self() para o ss_state criar
+                            %% o monitor sobre ESTE processo de ligação.
+                            Type = ss_registry:device_type(Device),
+                            ss_state:mark_online(Device, Type, self()),
+                            NewSession = Session#{authenticated := true,
+                                                  role := producer,
+                                                  device_id := Device},
+                            {ok_resp(), NewSession};
+                        false ->
+                            {error_resp(401, <<"auth_failed">>), Session}
+                    end
+            end
+    end.
+
+handle_auth_consumer(Map, Session) ->
+    case maps:get(authenticated, Session) of
+        true ->
+            {error_resp(409, <<"already_authenticated">>), Session};
+        false ->
+            User     = maps:get(<<"user">>, Map, undefined),
+            Password = maps:get(<<"password">>, Map, undefined),
+            case is_binary(User) andalso is_binary(Password) of
+                false ->
+                    {error_resp(400, <<"invalid">>), Session};
+                true ->
+                    case ss_registry:authenticate_consumer(User, Password) of
+                        true ->
+                            NewSession = Session#{authenticated := true,
+                                                  role := consumer,
+                                                  device_id := undefined},
+                            {ok_resp(), NewSession};
+                        false ->
+                            {error_resp(401, <<"auth_failed">>), Session}
+                    end
+            end
+    end.
+
+%%====================================================================
+%% Handlers — eventos e queries
+%%====================================================================
+
+handle_event(Map, Session) ->
+    with_role(producer, Session, fun() ->
+        case has_fields(Map, [<<"type">>, <<"timestamp">>]) of
+            false ->
+                error_resp(400, <<"invalid">>);
+            true ->
+                ss_state:mark_event(maps:get(device_id, Session)),
+                ok_resp()
+        end
+    end).
+
+%% Nota: as queries são GLOBAIS (somam todas as zonas) -> vão ao ss_cluster,
+%% que mantém a cópia replicada do estado de todos os nós.
+
+handle_online_count(_Map, Session) ->
+    with_role(consumer, Session, fun() ->
+        result_resp(#{<<"online">> => ss_cluster:count_online()})
+    end).
+
+handle_online_count_by_type(Map, Session) ->
+    with_role(consumer, Session, fun() ->
+        case maps:get(<<"type">>, Map, undefined) of
+            Type when is_binary(Type) ->
+                result_resp(#{<<"online">> => ss_cluster:count_online_by_type(Type)});
+            _ ->
+                error_resp(400, <<"Missing 'type' field">>)
+        end
+    end).
+
+handle_is_online(Map, Session) ->
+    with_role(consumer, Session, fun() ->
+        case maps:get(<<"device">>, Map, undefined) of
+            Device when is_binary(Device) ->
+                result_resp(#{<<"online">> => ss_cluster:is_online(Device)});
+            _ ->
+                error_resp(400, <<"Missing 'device' field">>)
+        end
+    end).
+
+handle_active_count(_Map, Session) ->
+    with_role(consumer, Session, fun() ->
+        result_resp(#{<<"active">> => ss_cluster:count_active()})
+    end).
+
+%%====================================================================
+%% Handlers — subscrição de notificações (consumidor)
+%%====================================================================
+
+handle_subscribe(Socket, Map, Session) ->
+    with_role(consumer, Session, fun() ->
+        case sub_topic(Map) of
+            {ok, Topic} ->
+                ss_pubsub:subscribe(self(), Socket, Topic),
+                ok_resp();
+            error ->
+                error_resp(400, <<"invalid subscription">>)
+        end
+    end).
+
+handle_unsubscribe(Map, Session) ->
+    with_role(consumer, Session, fun() ->
+        case sub_topic(Map) of
+            {ok, Topic} ->
+                ss_pubsub:unsubscribe(self(), Topic),
+                ok_resp();
+            error ->
+                error_resp(400, <<"invalid subscription">>)
+        end
+    end).
+
+%% Traduz os campos do pedido para uma TopicKey do ss_pubsub.
+%%   {"event":"type_empty","type":"car"} -> {type_empty, <<"car">>}
+%%   {"event":"record","type":"car"}     -> {record, <<"car">>}
+%%   {"event":"record","type":"any"}     -> {record, any}
+sub_topic(Map) ->
+    case maps:get(<<"event">>, Map, undefined) of
+        <<"type_empty">> ->
+            case maps:get(<<"type">>, Map, undefined) of
+                T when is_binary(T) -> {ok, {type_empty, T}};
+                _ -> error
+            end;
+        <<"record">> ->
+            case maps:get(<<"type">>, Map, undefined) of
+                <<"any">> -> {ok, {record, any}};
+                T when is_binary(T) -> {ok, {record, T}};
+                undefined -> {ok, {record, any}}
+            end;
+        <<"percentage">> ->
+            {ok, percentage};
+        _ ->
+            error
+    end.
+
+%%====================================================================
+%% Auxiliares
+%%====================================================================
+
+%% with_role/3 — verifica autenticação e papel; se ok, corre Fun (que devolve
+%% já a resposta JSON). Devolve sempre {RespostaJSON, Session} (a sessão não
+%% muda nestes comandos). Centraliza as verificações que se repetiam.
+with_role(NeededRole, Session, Fun) ->
+    case maps:get(authenticated, Session) of
+        false ->
+            {error_resp(401, <<"not_authenticated">>), Session};
+        true ->
+            case maps:get(role, Session) of
+                NeededRole -> {Fun(), Session};
+                _          -> {error_resp(401, <<"permission_denied">>), Session}
+            end
+    end.
+
+has_fields(Map, Keys) ->
+    lists:all(fun(K) -> maps:is_key(K, Map) end, Keys).
+
+%%====================================================================
+%% Construção das respostas (JSON)
+%%====================================================================
+
+ok_resp() ->
+    ss_json:encode(#{<<"status">> => <<"ok">>}).
+
+result_resp(Result) ->
+    ss_json:encode(#{<<"status">> => <<"ok">>, <<"result">> => Result}).
+
+error_resp(Code, Msg) ->
+    ss_json:encode(#{<<"error">> => Msg, <<"code">> => Code}).
