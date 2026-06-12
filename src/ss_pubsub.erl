@@ -1,21 +1,9 @@
 %%%-------------------------------------------------------------------
-%%% ss_pubsub — Publicação/subscrição de ocorrências (Fase 3A)
-%%%
-%%% Os consumidores subscrevem ocorrências; quando o ss_state deteta uma,
-%%% chama publish/1 e nós enviamos uma notificação JSON para cada subscritor
-%%% interessado (escrevendo direto no socket dele).
-%%%
-%%% Chaves de tópico (TopicKey) suportadas nesta fase:
-%%%   {type_empty, Type}   -> tipo Type ficou sem online
-%%%   {record, Type}       -> novo recorde de online do tipo Type
-%%%   {record, any}        -> novo recorde de online no total (qualquer tipo)
-%%%
-%%% Estado:
-%%%   subs    : TopicKey -> #{Pid => Socket}    (quem subscreve cada tópico)
-%%%   clients : Pid -> #{socket, ref, topics}    (p/ limpar quando o cliente cai)
-%%%
-%%% CONCEITOS NOVOS: gen_tcp:send a partir de OUTRO processo (push), e usar
-%%% monitores para limpar subscrições de clientes que desligam.
+%%% ss_pubsub — Notificações por subscrição para consumidores.
+%%% O ss_state/ss_cluster chamam publish/1; enviamos a notificação JSON direto
+%%% no socket de cada subscritor interessado. TopicKey suportadas:
+%%%   {type_empty, Type} | {record, Type} | {record, any} | percentage
+%%% Estado: subs (TopicKey -> #{Pid => Socket}); clients (Pid -> socket/ref/topics).
 %%%-------------------------------------------------------------------
 -module(ss_pubsub).
 -behaviour(gen_server).
@@ -30,16 +18,12 @@
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
 
-%% Pid    = processo ss_conn do consumidor
-%% Socket = socket desse consumidor (para lhe enviarmos pushes)
-%% Topic  = TopicKey (ver topo do ficheiro)
 subscribe(Pid, Socket, Topic) ->
     gen_server:call(?MODULE, {subscribe, Pid, Socket, Topic}).
 
 unsubscribe(Pid, Topic) ->
     gen_server:call(?MODULE, {unsubscribe, Pid, Topic}).
 
-%% Chamado pelo ss_state quando deteta uma ocorrência. Assíncrono (cast).
 publish(Occurrence) ->
     gen_server:cast(?MODULE, {publish, Occurrence}).
 
@@ -54,11 +38,10 @@ handle_call({subscribe, Pid, Socket, Topic}, _From, State) ->
     Subs    = maps:get(subs, State),
     Clients = maps:get(clients, State),
 
-    %% 1. adicionar Pid->Socket ao conjunto de subscritores deste tópico
     TopicMap  = maps:get(Topic, Subs, #{}),
     Subs2     = maps:put(Topic, maps:put(Pid, Socket, TopicMap), Subs),
 
-    %% 2. garantir registo do cliente (monitor criado uma só vez) e juntar tópico
+    %% Monitoriza o cliente uma só vez (para limpar quando cair).
     Client = case maps:find(Pid, Clients) of
                  {ok, C} -> C;
                  error   -> #{socket => Socket,
@@ -76,7 +59,6 @@ handle_call({unsubscribe, Pid, Topic}, _From, State) ->
 handle_cast({publish, Occurrence}, State) ->
     Subs = maps:get(subs, State),
     Msg  = notification_json(Occurrence),
-    %% Para cada tópico-alvo desta ocorrência, enviar a todos os subscritores.
     lists:foreach(
         fun(Topic) ->
             maps:foreach(
@@ -98,13 +80,11 @@ handle_info(_Msg, State) ->
 %% Mapeamento ocorrência -> tópicos e -> JSON
 %%====================================================================
 
-%% Que tópicos uma ocorrência atinge (quem deve ser notificado).
 topics_for({type_empty, Type})       -> [{type_empty, Type}];
 topics_for({record, total, _V})      -> [{record, any}];
 topics_for({record, Type, _V})       -> [{record, Type}];
 topics_for({percentage, _D, _X, _P}) -> [percentage].
 
-%% Mensagem JSON enviada ao consumidor.
 notification_json({type_empty, Type}) ->
     ss_json:encode(#{<<"notify">> => <<"type_empty">>, <<"type">> => Type});
 notification_json({record, total, Value}) ->
@@ -113,7 +93,7 @@ notification_json({record, Type, Value}) ->
     ss_json:encode(#{<<"notify">> => <<"record">>, <<"type">> => Type, <<"value">> => Value});
 notification_json({percentage, Direction, Threshold, Pct}) ->
     ss_json:encode(#{<<"notify">>    => <<"percentage">>,
-                     <<"direction">> => atom_to_binary(Direction, utf8), %% up | down
+                     <<"direction">> => atom_to_binary(Direction, utf8),
                      <<"threshold">> => Threshold,
                      <<"value">>     => Pct}).
 
@@ -121,8 +101,7 @@ notification_json({percentage, Direction, Threshold, Pct}) ->
 %% Limpeza de subscrições
 %%====================================================================
 
-%% Remove a subscrição de um Pid a um Topic; se o cliente ficar sem tópicos,
-%% deixa de ser monitorizado e é esquecido.
+%% Remove a subscrição de Pid a Topic; sem tópicos, deixa de ser monitorizado.
 remove_sub(Pid, Topic, State) ->
     Subs    = maps:get(subs, State),
     Clients = maps:get(clients, State),
@@ -152,7 +131,6 @@ remove_client(Pid, State) ->
     case maps:find(Pid, Clients) of
         {ok, Client} ->
             Subs = maps:get(subs, State),
-            %% tirar este Pid de cada tópico que subscrevia
             Subs2 = lists:foldl(
                       fun(Topic, Acc) ->
                           TopicMap = maps:get(Topic, Acc, #{}),

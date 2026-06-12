@@ -1,19 +1,8 @@
 %%%-------------------------------------------------------------------
-%%% ss_conn — Tratamento de UMA ligação de cliente (Fases 1C + 2B)
-%%%
-%%% Um processo destes por ligação. Lê linhas JSON, despacha pelo campo "cmd",
-%%% e responde. Mantém o estado da SESSÃO nos argumentos de loop/2.
-%%%
-%%% Comandos:
-%%%   auth_producer / auth_consumer            (registo/autenticação)
-%%%   event                                    (produtor envia evento)
-%%%   online_count / online_count_by_type /
-%%%   is_online / active_count                 (consumidor faz queries)
-%%%
-%%% Respostas:
-%%%   sucesso sem dados : {"status":"ok"}
-%%%   sucesso com dados : {"status":"ok","result":{...}}
-%%%   erro              : {"error":"<msg>","code":<N>}
+%%% ss_conn — Tratamento de UMA ligação de cliente (um processo por ligação).
+%%% Lê linhas JSON, despacha pelo campo "cmd", responde, e mantém o estado da
+%%% sessão nos argumentos de loop/2. Respostas:
+%%%   {"status":"ok"} | {"status":"ok","result":{...}} | {"error":"<msg>","code":<N>}
 %%%-------------------------------------------------------------------
 -module(ss_conn).
 -export([start/1]).
@@ -32,8 +21,7 @@ loop(Socket, Session) ->
             gen_tcp:send(Socket, [Response, "\n"]),
             loop(Socket, NewSession);
         {error, closed} ->
-            %% O processo termina aqui. O monitor no ss_state deteta a morte e
-            %% marca o dispositivo offline automaticamente (não fazemos nada).
+            %% Ao terminar, o monitor no ss_state marca o dispositivo offline.
             io:format("[ss_conn] cliente desligou~n"),
             ok
     end.
@@ -89,8 +77,7 @@ handle_auth_producer(Map, Session) ->
                 true ->
                     case ss_registry:authenticate_device(Device, Password) of
                         true ->
-                            %% Marca online: passa self() para o ss_state criar
-                            %% o monitor sobre ESTE processo de ligação.
+                            %% self() é o pid monitorizado pelo ss_state.
                             Type = ss_registry:device_type(Device),
                             ss_state:mark_online(Device, Type, self()),
                             NewSession = Session#{authenticated := true,
@@ -141,8 +128,7 @@ handle_event(Map, Session) ->
         end
     end).
 
-%% Nota: as queries são GLOBAIS (somam todas as zonas) -> vão ao ss_cluster,
-%% que mantém a cópia replicada do estado de todos os nós.
+%% Queries são GLOBAIS (somam todas as zonas) -> vão ao ss_cluster.
 
 handle_online_count(_Map, Session) ->
     with_role(consumer, Session, fun() ->
@@ -200,10 +186,8 @@ handle_unsubscribe(Map, Session) ->
         end
     end).
 
-%% Traduz os campos do pedido para uma TopicKey do ss_pubsub.
-%%   {"event":"type_empty","type":"car"} -> {type_empty, <<"car">>}
-%%   {"event":"record","type":"car"}     -> {record, <<"car">>}
-%%   {"event":"record","type":"any"}     -> {record, any}
+%% Traduz os campos do pedido numa TopicKey do ss_pubsub. Ex.:
+%%   {"event":"record","type":"car"} -> {record, <<"car">>}; "any" -> {record, any}.
 sub_topic(Map) ->
     case maps:get(<<"event">>, Map, undefined) of
         <<"type_empty">> ->
@@ -227,9 +211,7 @@ sub_topic(Map) ->
 %% Auxiliares
 %%====================================================================
 
-%% with_role/3 — verifica autenticação e papel; se ok, corre Fun (que devolve
-%% já a resposta JSON). Devolve sempre {RespostaJSON, Session} (a sessão não
-%% muda nestes comandos). Centraliza as verificações que se repetiam.
+%% Verifica autenticação e papel; se ok corre Fun (que devolve a resposta JSON).
 with_role(NeededRole, Session, Fun) ->
     case maps:get(authenticated, Session) of
         false ->

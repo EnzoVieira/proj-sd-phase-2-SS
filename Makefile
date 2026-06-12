@@ -15,7 +15,6 @@ CHUMAK_EBIN = $(CHUMAK_DIR)/ebin
 vpath %.erl src test
 
 SOURCES = $(wildcard src/*.erl) $(wildcard test/*.erl)
-# notdir tira a pasta: src/ss_tcp.erl -> ss_tcp.erl -> ebin/ss_tcp.beam
 BEAMS   = $(patsubst %.erl,$(EBIN_DIR)/%.beam,$(notdir $(SOURCES)))
 
 APP_SRC = src/ss.app.src

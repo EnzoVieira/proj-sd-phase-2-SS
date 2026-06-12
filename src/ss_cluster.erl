@@ -1,24 +1,8 @@
 %%%-------------------------------------------------------------------
-%%% ss_cluster — Réplica do estado global + gossip entre nós (Fase 4B)
-%%%
-%%% gen_server que:
-%%%   - mantém a cópia local do estado global (ss_crdt)
-%%%   - num tick periódico: lê o estado local (ss_state), marca-o como a "sua
-%%%     zona" com versão crescente, e envia o estado global a todos os peers
-%%%   - ao receber estado de um peer: faz merge
-%%%   - responde às queries GLOBAIS (somando todas as zonas)
-%%%
-%%% Configuração (application env da app 'ss'):
-%%%   zone            : id da zona deste nó (átomo). Default: node()
-%%%   peers           : lista de nós Erlang vizinhos. Default: []
-%%%   gossip_interval : período do tick em ms. Default: 500
-%%%
-%%% Transporte: distribuição Erlang (gen_server:cast para {ss_cluster, Node}).
-%%% Na Fase 5 será substituído por 0MQ — só a função broadcast/2 muda.
-%%%
-%%% CONCEITOS NOVOS: timer periódico (erlang:send_after), comunicação entre
-%%% nós Erlang, anti-entropia (reenviar o estado todo regularmente -> tolera
-%%% perda de mensagens e nós que entram/saem).
+%%% ss_cluster — Réplica do estado global (ss_crdt) e queries globais.
+%%% Num tick periódico marca a sua zona (versão crescente) e publica o estado
+%%% via ss_gossip (0MQ); ao receber estado de um peer, faz merge.
+%%% Config (env 'ss'): zone (binary; default = node()), gossip_interval (ms).
 %%%-------------------------------------------------------------------
 -module(ss_cluster).
 -behaviour(gen_server).
@@ -40,11 +24,11 @@ count_online_by_type(Type)  -> gen_server:call(?MODULE, {count_online_by_type, T
 is_online(Device)           -> gen_server:call(?MODULE, {is_online, Device}).
 count_active()              -> gen_server:call(?MODULE, count_active).
 
-%% Para as ocorrências de percentagem (Fase 4C):
+%% Para as ocorrências de percentagem.
 zone_online_count()         -> gen_server:call(?MODULE, zone_online_count).
 global_online_count()       -> gen_server:call(?MODULE, count_online).
 
-%% Útil para depurar: ver o estado global completo.
+%% Depuração: ver o estado global completo.
 dump()                      -> gen_server:call(?MODULE, dump).
 
 %%====================================================================
@@ -52,8 +36,7 @@ dump()                      -> gen_server:call(?MODULE, dump).
 %%====================================================================
 
 init([]) ->
-    %% Zona como BINARY (viaja pela rede com term_to_binary; evita criar
-    %% átomos no destino com binary_to_term [safe]).
+    %% Zona em binary (viaja com term_to_binary; evita criar átomos com [safe]).
     Zone = case application:get_env(ss, zone, undefined) of
                undefined           -> atom_to_binary(node(), utf8);
                Z when is_atom(Z)   -> atom_to_binary(Z, utf8);
@@ -66,8 +49,7 @@ init([]) ->
     schedule_tick(Interval),
     {ok, State}.
 
-%% --- Queries: respondem do estado global, com a zona local fresca ---
-
+%% Queries: respondem do estado global, com a zona local sempre fresca.
 handle_call(count_online, _From, State) ->
     {reply, ss_crdt:count_online(fresh_global(State)), State};
 handle_call({count_online_by_type, Type}, _From, State) ->
@@ -82,28 +64,21 @@ handle_call(zone_online_count, _From, State) ->
 handle_call(dump, _From, State) ->
     {reply, fresh_global(State), State}.
 
-%% --- Gossip recebido de um peer: merge ---
-%% O total global pode ter mudado -> reavaliar a percentagem desta zona.
+%% Gossip recebido: merge (o total global pode mudar -> reavaliar percentagem).
 handle_cast({merge, Remote}, State) ->
     Global2 = ss_crdt:merge(maps:get(global, State), Remote),
     {noreply, maybe_publish_percentage(State#{global := Global2})};
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
-%% --- Tick periódico: atualiza a própria zona e faz gossip ---
+%% Tick: atualiza a própria zona e publica o estado (anti-entropia).
 handle_info(tick, State) ->
     Zone    = maps:get(zone, State),
     Version = maps:get(version, State) + 1,
-
-    %% Constrói o estado da NOSSA zona (versão nova) e mete-o no global.
     LocalZone = local_zone_state(Version),
     Global2   = ss_crdt:set_zone(maps:get(global, State), Zone, LocalZone),
-
-    %% Anti-entropia: publicar o estado global inteiro via 0MQ (PUB).
     ss_gossip:publish(Global2),
-
     schedule_tick(maps:get(interval, State)),
-    %% a contagem da zona pode ter mudado -> reavaliar a percentagem
     {noreply, maybe_publish_percentage(State#{global := Global2, version := Version})};
 handle_info(_Msg, State) ->
     {noreply, State}.
@@ -112,22 +87,19 @@ handle_info(_Msg, State) ->
 %% Auxiliares
 %%====================================================================
 
-%% Estado global com a zona local SEMPRE fresca (lida agora do ss_state).
-%% Usado nas queries para não dependerem do último tick.
+%% Estado global com a zona local fresca (queries não dependem do último tick).
 fresh_global(State) ->
     Zone  = maps:get(zone, State),
     Local = local_zone_state(maps:get(version, State)),
     ss_crdt:set_zone(maps:get(global, State), Zone, Local).
 
-%% Lê o estado local atual (online + ativos) e embrulha-o num estado de zona.
 local_zone_state(Version) ->
     #{version => Version,
       online  => ss_state:online_map(),
       active  => ss_state:count_active()}.
 
-%% Calcula a percentagem (online da zona / total global) e publica ocorrências
-%% de subida/descida ao cruzar os limiares X em {10,20,...,90}. Devolve o estado
-%% com o prev_pct atualizado.
+%% Percentagem (online da zona / total global): publica subidas/descidas ao
+%% cruzar os limiares {10,20,...,90}. Devolve o estado com prev_pct atualizado.
 maybe_publish_percentage(State) ->
     G     = fresh_global(State),
     Zone  = maps:get(zone, State),

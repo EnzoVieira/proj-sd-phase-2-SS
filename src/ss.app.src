@@ -1,20 +1,15 @@
 %% Ficheiro de aplicação OTP do SS.
-%% Descreve a aplicação: versão, módulos, dependências e como arrancar.
 {application, ss,
  [{description, "Servidor de Sessao (SS)"},
   {vsn, "0.1.0"},
   {modules, [ss_app, ss_sup, ss_registry, ss_state, ss_pubsub, ss_gossip,
              ss_cluster, ss_crdt, ss_tcp, ss_conn, ss_json, ss_client]},
   {registered, [ss_sup, ss_registry, ss_state, ss_pubsub, ss_gossip, ss_cluster]},
-  %% Aplicações OTP de que dependemos (sempre presentes).
-  %% (chumak é arrancado por ss_gossip via ensure_all_started, não aqui, para
-  %%  não obrigar application:start(ss) a tê-lo já a correr.)
+  %% chumak é arrancado por ss_gossip (ensure_all_started), não aqui.
   {applications, [kernel, stdlib]},
-  %% Módulo de arranque: o OTP chama ss_app:start/2.
   {mod, {ss_app, []}},
-  %% Variáveis de configuração lidas com application:get_env/2.
-  %%   zone/gossip_port/gossip_peers são sobrepostas por nó no arranque (multi-nó).
-  %% gossip_port 7100: evita o 7000, usado pelo AirPlay Receiver no macOS.
+  %% zone/gossip_port/gossip_peers são sobrepostas por nó (multi-nó).
+  %% gossip_port 7100 evita o 7000 (AirPlay Receiver no macOS).
   {env, [{port, 9000}, {zone, undefined}, {gossip_interval, 500},
          {gossip_port, 7100}, {gossip_peers, []}]}
  ]}.

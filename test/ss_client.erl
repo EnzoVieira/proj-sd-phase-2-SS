@@ -1,11 +1,7 @@
 %%%-------------------------------------------------------------------
-%%% ss_client — Cliente de teste em Erlang (Fase 1C)
-%%%
-%%% Helpers para falar com o SS a partir da shell Erlang. Exemplo:
-%%%   S = ss_client:connect().
+%%% ss_client — Cliente de teste em Erlang (para usar na shell). Ex.:
+%%%   S = ss_client:connect(),
 %%%   ss_client:auth_producer(S, <<"car-001">>, <<"pass1">>).
-%%%   ss_client:send(S, #{<<"cmd">> => <<"auth_consumer">>, ...}).
-%%%   ss_client:close(S).
 %%%-------------------------------------------------------------------
 -module(ss_client).
 -export([connect/0, connect/1, send/2, close/1,
@@ -22,7 +18,7 @@ connect(Port) ->
                                    [binary, {packet, line}, {active, false}]),
     Socket.
 
-%% send/2 — envia um mapa (codificado em JSON) e devolve a resposta descodificada.
+%% Envia um mapa (JSON) e devolve a resposta descodificada.
 send(Socket, Map) ->
     ok = gen_tcp:send(Socket, [ss_json:encode(Map), "\n"]),
     {ok, Resp} = gen_tcp:recv(Socket, 0),
@@ -38,8 +34,7 @@ auth_consumer(Socket, User, Password) ->
                    <<"user">> => User,
                    <<"password">> => Password}).
 
-%% event/3 — envia um evento. Fields é um mapa com os campos extra (índices),
-%% ex: #{<<"speed">> => 40}. type e timestamp são obrigatórios.
+%% Fields = campos índice extra, ex: #{<<"speed">> => 40}.
 event(Socket, Type, Fields) ->
     Base = #{<<"cmd">> => <<"event">>,
              <<"type">> => Type,
@@ -58,23 +53,17 @@ is_online(Socket, Device) ->
 active_count(Socket) ->
     send(Socket, #{<<"cmd">> => <<"active_count">>}).
 
-%% Event = <<"type_empty">> | <<"record">>; Type = <<"car">> | <<"any">> | ...
+%% Event = <<"type_empty">> | <<"record">> | <<"percentage">>.
 subscribe(Socket, Event, Type) ->
     send(Socket, #{<<"cmd">> => <<"subscribe">>, <<"event">> => Event, <<"type">> => Type}).
 
 unsubscribe(Socket, Event, Type) ->
     send(Socket, #{<<"cmd">> => <<"unsubscribe">>, <<"event">> => Event, <<"type">> => Type}).
 
-%% listen/1 — torna a receção AUTOMÁTICA. Põe o socket em modo ATIVO e cria um
-%% processo que recebe as notificações como mensagens {tcp, Socket, Linha} e
-%% imprime-as à medida que chegam (sem nunca chamar recv).
-%%
-%% Usar DEPOIS de subscrever, e NÃO misturar com send/2 ou recv_push/1 no mesmo
-%% socket (esses são para modo passivo). Devolve o Pid do ouvinte.
+%% Receção automática: põe o socket em modo ativo e imprime as notificações à
+%% medida que chegam. Usar após subscrever; não misturar com send/2 ou recv_push.
 listen(Socket) ->
     Pid = spawn(fun() ->
-        %% Espera até passarmos a posse do socket para este processo, só depois
-        %% ativa o modo ativo (assim as mensagens vêm para cá).
         receive go -> ok end,
         inet:setopts(Socket, [{active, true}]),
         listen_loop(Socket)
@@ -94,7 +83,7 @@ listen_loop(Socket) ->
             ok
     end.
 
-%% Lê uma notificação assíncrona empurrada pelo servidor (com timeout).
+%% Lê uma notificação assíncrona (modo passivo, com timeout).
 recv_push(Socket) -> recv_push(Socket, 1000).
 recv_push(Socket, Timeout) ->
     case gen_tcp:recv(Socket, 0, Timeout) of

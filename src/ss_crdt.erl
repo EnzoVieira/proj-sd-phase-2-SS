@@ -1,20 +1,10 @@
 %%%-------------------------------------------------------------------
-%%% ss_crdt — Estado global replicável (Fase 4A)
-%%%
-%%% Estrutura (CvRDT — CRDT baseado em estado):
-%%%   Global = #{ Zona => Zona_State }
-%%%   Zona_State = #{ version => N,
-%%%                   online  => #{DeviceId => Tipo},
-%%%                   active  => K }
-%%%
-%%% Invariante: cada Zona tem um único ESCRITOR (o nó dessa zona). Por isso as
-%%% versões de uma zona são totalmente ordenadas e o merge "fica com a versão
-%%% mais alta" é suficiente (é um mapa de LWW-Registers, um por zona).
-%%%
-%%% merge/2 é comutativo, associativo e idempotente -> as réplicas convergem
-%%% independentemente da ordem/repetição das mensagens (ver ss_crdt_tests).
-%%%
-%%% Este módulo é PURO (sem processos nem efeitos) — daí ser fácil de testar.
+%%% ss_crdt — Estado global replicável (CRDT state-based / CvRDT). Puro.
+%%%   Global     = #{ Zona => Zona_State }
+%%%   Zona_State = #{ version => N, online => #{DeviceId => Tipo}, active => K }
+%%% Invariante: um único escritor por zona, logo as versões de uma zona são
+%%% totalmente ordenadas e merge/2 "fica com a versão mais alta" (LWW por zona).
+%%% merge/2 é comutativo, associativo e idempotente (ver ss_crdt_tests).
 %%%-------------------------------------------------------------------
 -module(ss_crdt).
 
@@ -32,16 +22,15 @@ new() -> #{}.
 new_zone() ->
     #{version => 0, online => #{}, active => 0}.
 
-%% Substitui o estado de uma zona (usado pelo nó DONO da zona).
+%% Substitui o estado de uma zona (usado pelo nó dono da zona).
 set_zone(Global, Zone, ZoneState) ->
     maps:put(Zone, ZoneState, Global).
 
 %%====================================================================
-%% merge — o coração do CRDT
+%% merge
 %%====================================================================
 
-%% Funde dois estados globais. Para cada zona presente em qualquer um deles,
-%% fica com a sua versão mais alta.
+%% Funde dois estados globais: por cada zona, fica com a versão mais alta.
 merge(G1, G2) ->
     maps:fold(
         fun(Zone, ZS2, Acc) ->
@@ -52,7 +41,6 @@ merge(G1, G2) ->
         end,
         G1, G2).
 
-%% Funde duas réplicas do estado DA MESMA zona: a versão mais alta vence.
 merge_zone(ZS1, ZS2) ->
     case maps:get(version, ZS1) >= maps:get(version, ZS2) of
         true  -> ZS1;
@@ -60,7 +48,7 @@ merge_zone(ZS1, ZS2) ->
     end.
 
 %%====================================================================
-%% Queries globais (somam/percorrem todas as zonas)
+%% Queries globais (percorrem todas as zonas)
 %%====================================================================
 
 count_online(Global) ->
@@ -79,7 +67,7 @@ is_online(Global, Device) ->
 count_active(Global) ->
     fold_zones(fun(ZS, Acc) -> Acc + maps:get(active, ZS, 0) end, 0, Global).
 
-%% Nº de online numa zona específica (para a percentagem zona vs total).
+%% Nº de online de uma zona específica (para a percentagem zona vs total).
 zone_online_count(Global, Zone) ->
     case maps:find(Zone, Global) of
         {ok, ZS} -> maps:size(online(ZS));
@@ -95,11 +83,10 @@ online(ZS) -> maps:get(online, ZS, #{}).
 fold_zones(Fun, Acc0, Global) ->
     maps:fold(fun(_Zone, ZS, Acc) -> Fun(ZS, Acc) end, Acc0, Global).
 
-%% Devolve true assim que alguma zona satisfaz o predicado.
+%% True assim que alguma zona satisfaz o predicado.
 fold_zones_until(Pred, Global) ->
     lists:any(fun(ZS) -> Pred(ZS) end, maps:values(Global)).
 
-%% Conta quantos valores de um mapa são iguais a Value.
 count_values(Value, Map) ->
     maps:fold(fun(_K, V, Acc) when V =:= Value -> Acc + 1;
                  (_K, _V, Acc) -> Acc

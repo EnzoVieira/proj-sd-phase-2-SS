@@ -1,6 +1,5 @@
 %%%-------------------------------------------------------------------
-%%% ss_dist_demo — Demonstração distribuída (Fases 4 e 5)
-%%%
+%%% ss_dist_demo — Demonstração distribuída.
 %%% Arranca 2 nós SS (zonas diferentes) na mesma máquina com o módulo slave.
 %%% A REPLICAÇÃO entre nós é feita por 0MQ/chumak (gossip PUB/SUB) — a
 %%% distribuição Erlang aqui serve só para o harness arrancar/configurar os nós.

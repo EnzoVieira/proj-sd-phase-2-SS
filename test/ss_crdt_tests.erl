@@ -1,8 +1,6 @@
 %%%-------------------------------------------------------------------
-%%% ss_crdt_tests — Testes EUnit do CRDT (Fase 4A)
-%%%
-%%% Prova que merge/2 é comutativo, associativo e idempotente (as 3
-%%% propriedades que garantem a convergência das réplicas), e testa as queries.
+%%% ss_crdt_tests — Testes EUnit do CRDT.
+%%% Prova que merge/2 é comutativo, associativo e idempotente, e testa as queries.
 %%%
 %%% Correr: erl -pa ebin -noshell -eval "eunit:test(ss_crdt_tests,[verbose])" -s init stop
 %%%-------------------------------------------------------------------
