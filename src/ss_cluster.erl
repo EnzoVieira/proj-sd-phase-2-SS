@@ -52,14 +52,16 @@ dump()                      -> gen_server:call(?MODULE, dump).
 %%====================================================================
 
 init([]) ->
-    Zone     = case application:get_env(ss, zone, undefined) of
-                   undefined -> node();   %% sem zona configurada -> usa o nome do nó
-                   Z -> Z
-               end,
-    Peers    = application:get_env(ss, peers, []),
+    %% Zona como BINARY (viaja pela rede com term_to_binary; evita criar
+    %% átomos no destino com binary_to_term [safe]).
+    Zone = case application:get_env(ss, zone, undefined) of
+               undefined           -> atom_to_binary(node(), utf8);
+               Z when is_atom(Z)   -> atom_to_binary(Z, utf8);
+               Z when is_binary(Z) -> Z
+           end,
     Interval = application:get_env(ss, gossip_interval, 500),
-    io:format("[ss_cluster] zona=~p peers=~p~n", [Zone, Peers]),
-    State = #{zone => Zone, peers => Peers, interval => Interval,
+    io:format("[ss_cluster] zona=~p~n", [Zone]),
+    State = #{zone => Zone, interval => Interval,
               global => ss_crdt:new(), version => 0, prev_pct => 0},
     schedule_tick(Interval),
     {ok, State}.
@@ -91,15 +93,14 @@ handle_cast(_Msg, State) ->
 %% --- Tick periódico: atualiza a própria zona e faz gossip ---
 handle_info(tick, State) ->
     Zone    = maps:get(zone, State),
-    Peers   = maps:get(peers, State),
     Version = maps:get(version, State) + 1,
 
     %% Constrói o estado da NOSSA zona (versão nova) e mete-o no global.
     LocalZone = local_zone_state(Version),
     Global2   = ss_crdt:set_zone(maps:get(global, State), Zone, LocalZone),
 
-    %% Anti-entropia: enviar o estado global inteiro a todos os peers.
-    broadcast(Peers, {merge, Global2}),
+    %% Anti-entropia: publicar o estado global inteiro via 0MQ (PUB).
+    ss_gossip:publish(Global2),
 
     schedule_tick(maps:get(interval, State)),
     %% a contagem da zona pode ter mudado -> reavaliar a percentagem
@@ -155,10 +156,6 @@ publish_crossings(New, Prev) ->
             end
         end,
         lists:seq(10, 90, 10)).
-
-broadcast(Peers, Msg) ->
-    %% cast para um nó inacessível falha em silêncio — bom para tolerância a faltas.
-    lists:foreach(fun(Peer) -> gen_server:cast({?MODULE, Peer}, Msg) end, Peers).
 
 schedule_tick(Interval) ->
     erlang:send_after(Interval, self(), tick).

@@ -14,8 +14,21 @@ state-based** (eventual consistency, tolerante a faltas).
 
 - **Erlang/OTP 24+** (testado em OTP 24)
 - **make**
+- **git** — para obter o **chumak** (ZeroMQ em Erlang puro), usado no transporte SS↔SS.
 
 Verificar: `erl -version` e `make --version`.
+
+### Dependência: chumak (0MQ)
+
+O chumak é "vendorizado" em `deps/chumak` (não precisa de `libzmq` em C nem de `rebar3`).
+Se a pasta não existir (ex.: após clonar este repositório), obtém-no com:
+
+```bash
+git clone https://github.com/zeromq/chumak.git deps/chumak
+```
+
+O `make` compila-o automaticamente para `deps/chumak/ebin`. **Em runtime, inclui sempre
+`-pa deps/chumak/ebin`** no comando `erl` (ver exemplos abaixo).
 
 ---
 
@@ -47,13 +60,17 @@ ebin/                   .beam compilados (gerado pelo make)
 ## Compilar
 
 ```bash
-make          # compila src/ e test/ -> ebin/ e gera ebin/ss.app
-make clean    # apaga os .beam e o ss.app
+make          # compila o chumak (1x), src/ e test/ -> ebin/, e gera ebin/ss.app
+make clean    # apaga os .beam e o ss.app (NÃO apaga o chumak)
+make clean-deps  # apaga o ebin do chumak (recompila no próximo make)
 ```
 
-> **Nota operacional:** se um nó Erlang anterior ficar vivo, a porta (9000/9001/...) fica
-> ocupada (`eaddrinuse`). Termina sempre com `halt().` na shell, ou força com
-> `pkill -9 -f beam.smp`.
+> **Nota operacional (portas):** se um nó Erlang anterior ficar vivo, a porta fica ocupada
+> (`eaddrinuse`). Termina sempre com `halt().` na shell, ou força com `pkill -9 -f beam.smp`.
+>
+> **No macOS**, a porta **7000** é usada pelo *AirPlay Receiver* — por isso o gossip usa por
+> omissão a **7100**. (Podes desligar o AirPlay Receiver em Definições → Geral → AirDrop e
+> Handoff, mas não é preciso.)
 
 ---
 
@@ -75,7 +92,7 @@ Arranca o servidor numa shell Erlang:
 
 ```bash
 make
-erl -pa ebin
+erl -pa ebin -pa deps/chumak/ebin
 ```
 
 Na shell (`1>`):
@@ -140,7 +157,7 @@ ou como consumidor:
 
 1. **Terminal 1** — servidor + consumidor a escutar:
    ```bash
-   erl -pa ebin
+   erl -pa ebin -pa deps/chumak/ebin
    ```
    ```erlang
    application:start(ss).
@@ -152,7 +169,7 @@ ou como consumidor:
 
 2. **Terminal 2** — um produtor (NÃO arranques a app outra vez; o servidor é só no T1):
    ```bash
-   erl -pa ebin
+   erl -pa ebin -pa deps/chumak/ebin
    ```
    ```erlang
    P = ss_client:connect(),
@@ -175,53 +192,62 @@ erl -pa ebin -noshell -eval "eunit:test(ss_crdt_tests, [verbose])" -s init stop
 
 ## E) Sistema distribuído — demo automático
 
-Arranca 2 nós (zonas `zonea`/`zoneb`, portas 9001/9002) automaticamente:
+Arranca 2 nós (zonas `zonea`/`zoneb`, clientes 9001/9002, gossip 0MQ 7001/7002)
+automaticamente. A **replicação entre nós é feita por 0MQ/chumak** (a distribuição Erlang
+serve só para o harness arrancar os nós):
 
 ```bash
 make
 
 # Estado GLOBAL replicado + tolerância a faltas (mata um nó no fim)
-erl -sname master -setcookie sscookie -pa ebin -noshell -eval 'ss_dist_demo:run()' -s init stop
+erl -sname master -setcookie sscookie -pa ebin -pa deps/chumak/ebin \
+    -noshell -eval 'ss_dist_demo:run()' -s init stop
 
 # Ocorrências de PERCENTAGEM (zona vs total global)
-erl -sname master -setcookie sscookie -pa ebin -noshell -eval 'ss_dist_demo:run_pct()' -s init stop
+erl -sname master -setcookie sscookie -pa ebin -pa deps/chumak/ebin \
+    -noshell -eval 'ss_dist_demo:run_pct()' -s init stop
 ```
+
+> Podes ignorar `=ERROR REPORT ... zmq listen error`: são transitórios do chumak (um SUB a
+> ligar antes do PUB do outro nó estar pronto, ou a queda da ligação quando um nó morre).
 
 ---
 
 ## F) Sistema distribuído — manual (vários nós, vários terminais)
 
-O *short hostname* desta máquina é `macbook-enzo` (vê o teu com `hostname -s` e ajusta os
-nomes dos nós `nome@host`).
+Como o gossip agora é por **0MQ**, os nós **já NÃO precisam de distribuição Erlang**
+(`-sname`/`-setcookie`): são apenas dois `erl` normais, cada um com a sua porta de cliente e
+a sua configuração de gossip.
 
-1. **Terminal 1 — nó A (zona A, porta 9001):**
+1. **Terminal 1 — nó A (zona A, cliente 9001, gossip PUB 7001 → liga ao 7002 do B):**
    ```bash
-   erl -sname ssa -setcookie sscookie -pa ebin
+   erl -pa ebin -pa deps/chumak/ebin
    ```
    ```erlang
    application:load(ss),
-   application:set_env(ss, zone, zonea),
-   application:set_env(ss, peers, ['ssb@macbook-enzo']),
+   application:set_env(ss, zone, <<"zonea">>),
    application:set_env(ss, port, 9001),
+   application:set_env(ss, gossip_port, 7001),
+   application:set_env(ss, gossip_peers, [{"127.0.0.1", 7002}]),
    application:start(ss).
    ```
 
-2. **Terminal 2 — nó B (zona B, porta 9002):**
+2. **Terminal 2 — nó B (zona B, cliente 9002, gossip PUB 7002 → liga ao 7001 do A):**
    ```bash
-   erl -sname ssb -setcookie sscookie -pa ebin
+   erl -pa ebin -pa deps/chumak/ebin
    ```
    ```erlang
    application:load(ss),
-   application:set_env(ss, zone, zoneb),
-   application:set_env(ss, peers, ['ssa@macbook-enzo']),
+   application:set_env(ss, zone, <<"zoneb">>),
    application:set_env(ss, port, 9002),
-   application:start(ss),
-   net_adm:ping('ssa@macbook-enzo').      % garante que os nós se veem
+   application:set_env(ss, gossip_port, 7002),
+   application:set_env(ss, gossip_peers, [{"127.0.0.1", 7001}]),
+   application:start(ss).
    ```
 
-3. **Terminal 3 — clientes** (um cliente é só TCP, não precisa de ser nó distribuído):
+3. **Terminal 3 — clientes** (um cliente é só TCP):
    ```bash
-   erl -pa ebin
+   erl -pa ebin -pa deps/chumak/ebin
    ```
    ```erlang
    %% produtor na zona A
@@ -275,6 +301,7 @@ Pedido = uma linha JSON com campo `cmd`. Respostas:
 | Chave | Default | Descrição |
 |---|---|---|
 | `port` | 9000 | porta TCP dos clientes |
-| `zone` | `undefined` (→ `node()`) | id da zona deste nó |
-| `peers` | `[]` | nós SS vizinhos (gossip) |
-| `gossip_interval` | 500 | período do gossip (ms) |
+| `zone` | `undefined` (→ nome do nó) | id da zona deste nó (binary) |
+| `gossip_port` | 7100 | porta onde o PUB 0MQ deste nó faz *bind* |
+| `gossip_peers` | `[]` | `[{Host, Port}]` dos PUB dos vizinhos |
+| `gossip_interval` | 500 | período do gossip/anti-entropia (ms) |

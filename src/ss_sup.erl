@@ -34,6 +34,8 @@ init([]) ->
           start => {ss_pubsub, start_link, []}},
         #{id => ss_state,
           start => {ss_state, start_link, []}},
+        #{id => ss_gossip,
+          start => {ss_gossip, start_link, []}},
         #{id => ss_cluster,
           start => {ss_cluster, start_link, []}},
         #{id => ss_tcp,
