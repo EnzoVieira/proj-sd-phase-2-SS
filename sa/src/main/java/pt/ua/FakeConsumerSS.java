@@ -90,7 +90,6 @@ public class FakeConsumerSS {
                 System.out.println("[fake-consumer] Result:");
                 System.out.println("[fake-consumer]   COUNT: " + result.count);
                 System.out.println("[fake-consumer]   SUM: " + result.sum);
-                System.out.println("[fake-consumer]   AVG: " + result.average);
                 System.out.println("[fake-consumer]   MAX: " + result.max);
                 System.out.println("[fake-consumer]   MIN: " + result.min);
                 System.out.println("[fake-consumer]   SUM_PRODUCT: " + result.productSum);

@@ -1,70 +1,58 @@
 package pt.ua;
 
 import io.reactivex.rxjava3.core.Flowable;
+import io.reactivex.rxjava3.core.Single;
 import io.reactivex.rxjava3.schedulers.Schedulers;
 import java.util.concurrent.TimeUnit;
 
 public class AggregationEngine {
 
-    public AggregationResult aggregate(Flowable<Event> stream, AggregationRequest request) {
-        AggregationResult result = new AggregationResult();
-        result.type = request.type;
+    public Single<AggregationResult> aggregate(Flowable<Event> stream, AggregationRequest request) {
+        AggregationResult seed = new AggregationResult();
+        seed.type = request.type;
 
-        AggregationResult finalResult = stream
-                .subscribeOn(Schedulers.io())  // ✅ ADD isto — corre em thread IO separada
-                .reduce(result, (acc, ev) -> {
-                    acc.count++;
-
-                    double k2Value = 0;
-                    double k3Value = 0;
-
-                    if (request.k2 != null) {
-                        String k2Str = ev.getField(request.k2);
-                        if (k2Str != null) {
-                            try {
-                                k2Value = Double.parseDouble(k2Str);
-                            } catch (NumberFormatException ignored) {
-                            }
-                        }
-                    }
-
-                    if (request.k3 != null) {
-                        String k3Str = ev.getField(request.k3);
-                        if (k3Str != null) {
-                            try {
-                                k3Value = Double.parseDouble(k3Str);
-                            } catch (NumberFormatException ignored) {
-                            }
-                        }
-                    }
-
-                    if (k2Value > acc.max) acc.max = k2Value;
-                    if (k2Value < acc.min) acc.min = k2Value;
-
+        return stream
+                .subscribeOn(Schedulers.io())
+                .reduce(seed, (acc, ev) -> {
                     switch (request.type) {
                         case COUNT:
+                            acc.count++;
                             break;
-                        case SUM:
-                            acc.sum += k2Value;
+                        case SUM: {
+                            Double v = parseField(ev, request.k2);
+                            if (v != null) { acc.count++; acc.sum += v; }
                             break;
-                        case MAX:
+                        }
+                        case MAX: {
+                            Double v = parseField(ev, request.k2);
+                            if (v != null) { acc.count++; if (v > acc.max) acc.max = v; }
                             break;
-                        case MIN:
+                        }
+                        case MIN: {
+                            Double v = parseField(ev, request.k2);
+                            if (v != null) { acc.count++; if (v < acc.min) acc.min = v; }
                             break;
-                        case SUM_PRODUCT:
-                            acc.productSum += k2Value * k3Value;
+                        }
+                        case SUM_PRODUCT: {
+                            Double v2 = parseField(ev, request.k2);
+                            Double v3 = parseField(ev, request.k3);
+                            if (v2 != null && v3 != null) { acc.count++; acc.productSum += v2 * v3; }
                             break;
+                        }
                     }
-
                     return acc;
                 })
-                .timeout(30, TimeUnit.SECONDS)
-                .blockingGet();
+                .timeout(30, TimeUnit.SECONDS);
+    }
 
-        if (finalResult.count > 0) {
-            finalResult.average = finalResult.sum / finalResult.count;
+    private Double parseField(Event ev, String field) {
+        if (field == null) return null;
+        String raw = ev.getField(field);
+        if (raw == null) return null;
+        try {
+            return Double.parseDouble(raw);
+        } catch (NumberFormatException e) {
+            return null;
         }
-
-        return finalResult;
     }
 }

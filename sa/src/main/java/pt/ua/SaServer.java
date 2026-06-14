@@ -2,6 +2,7 @@ package pt.ua;
 
 import io.reactivex.rxjava3.core.Flowable;
 import java.io.IOException;
+import java.time.LocalDate;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.channels.*;
@@ -27,7 +28,7 @@ public class SaServer {
     private final Map<SocketChannel, AggregationRequest> pendingRequests = new ConcurrentHashMap<>();
     private final Map<SocketChannel, ByteBuffer> pendingWrites = new ConcurrentHashMap<>();
 
-    public SaServer(String zone, int port, String peerHost, int peerPort) {
+    public SaServer(String zone, int port, String peerHost, int peerPort, String astHost, int astPort) {
         this.zone = zone;
         this.port = port;
         this.self = new SaNode("sa-" + zone, zone, "localhost", port, peerPort);
@@ -38,7 +39,7 @@ public class SaServer {
                 peerPort,
                 peerPort + 100
         );
-        this.astClient = new AstClient("localhost", 7878);
+        this.astClient = new AstClient(astHost, astPort);
         this.peerClient = new SaPeerClient();
         this.peerServer = new SaPeerServer(port + 100, cache);
     }
@@ -95,11 +96,15 @@ public class SaServer {
         if (newlineIndex == -1) return;
 
         String line = buffer.substring(0, newlineIndex).trim();
-        buffer.setLength(0);
+        buffer.delete(0, newlineIndex + 1);
         if (line.isEmpty()) return;
 
         try {
             AggregationRequest request = JsonCodec.fromJson(line, AggregationRequest.class);
+            if (request.maxDay != null && !request.maxDay.isBefore(LocalDate.now())) {
+                sendLater(socket, "null\n");
+                return;
+            }
             if (cache.has(request)) {
                 System.out.println("Hit Local Cache");
                 sendLater(socket, JsonCodec.toJson(cache.get(request)) + "\n");
@@ -108,23 +113,27 @@ public class SaServer {
             System.out.println("Miss Local Cache ");
             pendingRequests.put(socket, request);
             peerClient.queryAsync(peer, request, peerResult -> {
-                try {
-                    if (peerResult != null) {
-                        System.out.println("Hit Peer Cache ");
-                        cache.put(request, peerResult);
-                        sendLater(socket, JsonCodec.toJson(peerResult) + "\n");
-                    } else {
-                        System.out.println("Miss Peer Cache ");
-                        Flowable<Event> stream = astClient.streamSubSeriesRange(
-                                request.minDay, request.maxDay, request.indexField, request.indexValue);
-                        AggregationResult result = engine.aggregate(stream, request);
-                        cache.put(request, result);
-                        sendLater(socket, JsonCodec.toJson(result) + "\n");
-                    }
-                } catch (Exception e) {
-                    sendLater(socket, "null\n");
-                } finally {
+                if (peerResult != null) {
+                    System.out.println("Hit Peer Cache");
+                    cache.put(request, peerResult);
+                    sendLater(socket, JsonCodec.toJson(peerResult) + "\n");
                     pendingRequests.remove(socket);
+                } else {
+                    System.out.println("Miss Peer Cache");
+                    Flowable<Event> stream = astClient.streamSubSeriesRange(
+                            request.minDay, request.maxDay, request.indexField, request.indexValue);
+                    engine.aggregate(stream, request)
+                            .subscribe(
+                                    result -> {
+                                        cache.put(request, result);
+                                        sendLater(socket, JsonCodec.toJson(result) + "\n");
+                                        pendingRequests.remove(socket);
+                                    },
+                                    error -> {
+                                        System.err.println("[sa-server] Aggregation failed: " + error.getMessage());
+                                        sendLater(socket, "null\n");
+                                        pendingRequests.remove(socket);
+                                    });
                 }
             });
         } catch (Exception e) {

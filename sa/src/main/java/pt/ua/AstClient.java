@@ -12,8 +12,6 @@ import java.nio.channels.Channels;
 import java.nio.channels.SocketChannel;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 public class AstClient {
     private final ObjectMapper mapper = new ObjectMapper()
@@ -29,24 +27,17 @@ public class AstClient {
     }
 
     public Flowable<Event> streamSubSeriesRange(LocalDate minDay, LocalDate maxDay, String indexField, String indexValue) {
-        return Flowable.concat(
-                Flowable.fromIterable(
-                                Stream.iterate(minDay, d -> !d.isAfter(maxDay), d -> d.plusDays(1))
-                                        .limit(365)
-                                        .collect(Collectors.toList())
-                        )
-                        .map(d -> streamSubSeries(d, indexField, indexValue))
-        );
-    }
-
-    private Flowable<Event> streamSubSeries(LocalDate day, String indexField, String indexValue) {
         return Flowable.create(emitter -> {
             try (SocketChannel channel = SocketChannel.open(new InetSocketAddress(host, port));
                  BufferedWriter writer = new BufferedWriter(Channels.newWriter(channel, StandardCharsets.UTF_8));
                  BufferedReader reader = new BufferedReader(Channels.newReader(channel, StandardCharsets.UTF_8))) {
 
-                // Request QUERY
-                AstRequest request = new AstRequest("QUERY", day.toString(), indexField, indexValue);
+                AstRequest request = new AstRequest();
+                request.op = "QUERY_RANGE";
+                request.minDay = minDay.toString();
+                request.maxDay = maxDay.toString();
+                request.indexField = indexField;
+                request.indexValue = indexValue;
                 writer.write(mapper.writeValueAsString(request));
                 writer.newLine();
                 writer.flush();
@@ -75,10 +66,9 @@ public class AstClient {
                     emitter.onError(e);
                 }
             }
-        }, BackpressureStrategy.ERROR);
+        }, BackpressureStrategy.BUFFER);
     }
 
-    // Request class
     private static class AstRequest {
         public String op;
         public String day;
@@ -86,19 +76,8 @@ public class AstClient {
         public String maxDay;
         public String indexField;
         public String indexValue;
-
-        public AstRequest() {
-        }
-
-        public AstRequest(String op, String day, String indexField, String indexValue) {
-            this.op = op;
-            this.day = day;
-            this.indexField = indexField;
-            this.indexValue = indexValue;
-        }
     }
 
-    // Response class
     private static class AstResponse {
         public String requestId;
         public String type;

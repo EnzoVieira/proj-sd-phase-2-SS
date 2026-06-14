@@ -14,8 +14,10 @@ import java.util.concurrent.Executors;
 import java.util.function.Consumer;
 
 public class SaPeerClient {
-    private final ExecutorService ioThread = Executors.newSingleThreadExecutor(r -> {
-        Thread t = new Thread(r, "sa-peer-client-io");
+    private static final java.util.concurrent.atomic.AtomicInteger THREAD_COUNT =
+            new java.util.concurrent.atomic.AtomicInteger();
+    private final ExecutorService ioThread = Executors.newFixedThreadPool(4, r -> {
+        Thread t = new Thread(r, "sa-peer-client-io-" + THREAD_COUNT.getAndIncrement());
         t.setDaemon(true);
         return t;
     });
