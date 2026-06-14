@@ -1,15 +1,22 @@
 package pt.ua;
 
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 public class AggregationCache {
-    private final Map<String, AggregationResult> cache = new ConcurrentHashMap<>();
     private static final int MAX_SIZE = 1000;
 
+    private final Map<String, AggregationResult> cache = Collections.synchronizedMap(
+            new LinkedHashMap<String, AggregationResult>(16, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<String, AggregationResult> eldest) {
+                    return size() > MAX_SIZE;
+                }
+            });
+
     public String makeKey(AggregationRequest request) {
-        return request.zone + "|" +
-                request.type + "|" +
+        return request.type + "|" +
                 request.minDay + "|" +
                 request.maxDay + "|" +
                 request.indexField + "|" +
@@ -27,11 +34,6 @@ public class AggregationCache {
     }
 
     public void put(AggregationRequest request, AggregationResult result) {
-        // Se cache cheio, remover mais antigo (simples: remover primeiro)
-        if (cache.size() >= MAX_SIZE) {
-            String firstKey = cache.keySet().iterator().next();
-            cache.remove(firstKey);
-        }
         cache.put(makeKey(request), result);
     }
 

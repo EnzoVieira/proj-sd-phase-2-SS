@@ -81,7 +81,7 @@ public class SaPeerServer {
         if (newlineIndex == -1) return;
 
         String line = buffer.substring(0, newlineIndex).trim();
-        buffer.setLength(0);
+        buffer.delete(0, newlineIndex + 1);
         if (line.isEmpty()) {
             enqueueWrite(socket, "null\n");
             return;

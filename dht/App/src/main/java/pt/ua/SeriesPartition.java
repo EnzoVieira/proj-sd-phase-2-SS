@@ -1,11 +1,12 @@
 package pt.ua;
 
 import io.reactivex.rxjava3.core.Flowable;
-import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.ArrayList;
+import java.util.List;
 
 public class SeriesPartition {
     private final SeriesKey key;
-    private final CopyOnWriteArrayList<Event> events = new CopyOnWriteArrayList<>();
+    private final List<Event> events = new ArrayList<>();
 
     public SeriesPartition(SeriesKey key) {
         this.key = key;
@@ -19,8 +20,8 @@ public class SeriesPartition {
         events.add(event);
     }
 
-    public Flowable<Event> stream() {
-        return Flowable.fromIterable(events);
+    public synchronized Flowable<Event> stream() {
+        return Flowable.fromIterable(new ArrayList<>(events));
     }
 
     public synchronized int size() {

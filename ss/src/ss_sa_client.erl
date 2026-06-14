@@ -8,7 +8,7 @@
 -module(ss_sa_client).
 -export([aggregate/1]).
 
--define(TIMEOUT, 5000).
+-define(TIMEOUT, 20000).   % 20s — cache fria sobre intervalo largo pode demorar
 
 %% aggregate(RequestMap) -> {ok, ResultMap} | {error, Reason}
 aggregate(Request) ->

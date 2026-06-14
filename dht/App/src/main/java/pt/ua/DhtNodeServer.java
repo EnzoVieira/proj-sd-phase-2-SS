@@ -15,7 +15,9 @@ import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 
 public class DhtNodeServer {
     private final NodeState state;
@@ -23,7 +25,10 @@ public class DhtNodeServer {
     private final PeerTable peers;
     private final ReactiveNodeClient client;
     private final ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
-    private final ExecutorService connectionPool = Executors.newCachedThreadPool();
+    private final ExecutorService connectionPool = new ThreadPoolExecutor(
+            4, 32, 60L, TimeUnit.SECONDS,
+            new LinkedBlockingQueue<>(256),
+            new ThreadPoolExecutor.CallerRunsPolicy());
 
     public DhtNodeServer(NodeState state, NodeInfo self, PeerTable peers) {
         this.state = state;
