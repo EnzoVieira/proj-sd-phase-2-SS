@@ -9,7 +9,7 @@
          event/3, online_count/1, online_count_by_type/2,
          is_online/2, active_count/1,
          subscribe/3, unsubscribe/3, recv_push/1, recv_push/2,
-         listen/1]).
+         listen/1, aggregate/2]).
 
 connect() -> connect(9000).
 
@@ -91,6 +91,11 @@ recv_push(Socket, Timeout) ->
         {error, timeout} -> timeout;
         {error, Reason}  -> {error, Reason}
     end.
+
+%% Map com os campos da agregação (type, minDay, maxDay, indexField,
+%% indexValue, k2, k3). O cmd é acrescentado aqui.
+aggregate(Socket, Map) ->
+    send(Socket, maps:put(<<"cmd">>, <<"aggregate">>, Map)).
 
 close(Socket) ->
     gen_tcp:close(Socket).

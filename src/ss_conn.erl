@@ -55,6 +55,7 @@ route(_S, <<"online_count">>, Map, Session)         -> handle_online_count(Map, 
 route(_S, <<"online_count_by_type">>, Map, Session) -> handle_online_count_by_type(Map, Session);
 route(_S, <<"is_online">>, Map, Session)            -> handle_is_online(Map, Session);
 route(_S, <<"active_count">>, Map, Session)         -> handle_active_count(Map, Session);
+route(_S, <<"aggregate">>, Map, Session)            -> handle_aggregate(Map, Session);
 route(S,  <<"subscribe">>, Map, Session)            -> handle_subscribe(S, Map, Session);
 route(_S, <<"unsubscribe">>, Map, Session)          -> handle_unsubscribe(Map, Session);
 route(_S, Cmd, _Map, Session) when is_binary(Cmd)   -> {error_resp(400, <<"Unknown command: ", Cmd/binary>>), Session};
@@ -160,6 +161,21 @@ handle_active_count(_Map, Session) ->
         result_resp(#{<<"active">> => ss_cluster:count_active()})
     end).
 
+%% aggregate: o SS reencaminha o pedido para o SA (Servidor de Agregação) e
+%% devolve o resultado. Campos: type, minDay, maxDay, indexField, indexValue, k2, k3.
+handle_aggregate(Map, Session) ->
+    with_role(consumer, Session, fun() ->
+        case build_agg_request(Map) of
+            {ok, Req} ->
+                case ss_sa_client:aggregate(Req) of
+                    {ok, Result}    -> result_resp(Result);
+                    {error, _Reason} -> error_resp(502, <<"sa_unavailable">>)
+                end;
+            {error, Msg} ->
+                error_resp(400, Msg)
+        end
+    end).
+
 %%====================================================================
 %% Handlers — subscrição de notificações (consumidor)
 %%====================================================================
@@ -225,6 +241,39 @@ with_role(NeededRole, Session, Fun) ->
 
 has_fields(Map, Keys) ->
     lists:all(fun(K) -> maps:is_key(K, Map) end, Keys).
+
+%% Valida e constrói o AggregationRequest (formato do SA) a partir do pedido.
+build_agg_request(Map) ->
+    case norm_agg_type(maps:get(<<"type">>, Map, undefined)) of
+        undefined ->
+            {error, <<"invalid aggregation type">>};
+        Type ->
+            Required = [<<"minDay">>, <<"maxDay">>, <<"indexField">>, <<"indexValue">>],
+            case has_fields(Map, Required) of
+                false ->
+                    {error, <<"missing required fields">>};
+                true ->
+                    IndexValue = maps:get(<<"indexValue">>, Map),
+                    {ok, #{<<"type">>       => Type,
+                           <<"zone">>       => maps:get(<<"zone">>, Map, IndexValue),
+                           <<"minDay">>     => maps:get(<<"minDay">>, Map),
+                           <<"maxDay">>     => maps:get(<<"maxDay">>, Map),
+                           <<"indexField">> => maps:get(<<"indexField">>, Map),
+                           <<"indexValue">> => IndexValue,
+                           <<"k2">>         => maps:get(<<"k2">>, Map, null),
+                           <<"k3">>         => maps:get(<<"k3">>, Map, null)}}
+            end
+    end.
+
+%% Normaliza o tipo para maiúsculas e valida contra as operações suportadas.
+norm_agg_type(T) when is_binary(T) ->
+    U = string:uppercase(T),
+    case lists:member(U, [<<"COUNT">>, <<"SUM">>, <<"MAX">>, <<"MIN">>, <<"SUM_PRODUCT">>]) of
+        true  -> U;
+        false -> undefined
+    end;
+norm_agg_type(_) ->
+    undefined.
 
 %%====================================================================
 %% Construção das respostas (JSON)
