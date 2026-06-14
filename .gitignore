@@ -1,4 +1,14 @@
+# Erlang (SS)
 ebin/
-tmp/
 
+# Java (SA/DHT)
+target/
+cp.txt
+dht/App/data/
+
+# IDE / OS
+.idea/
 .DS_Store
+
+# scratch local (repos originais do colega, referência)
+tmp/
