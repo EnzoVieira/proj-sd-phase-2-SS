@@ -3,7 +3,8 @@
  [{description, "Servidor de Sessao (SS)"},
   {vsn, "0.1.0"},
   {modules, [ss_app, ss_sup, ss_registry, ss_state, ss_pubsub, ss_gossip,
-             ss_cluster, ss_crdt, ss_tcp, ss_conn, ss_json, ss_sa_client, ss_client]},
+             ss_cluster, ss_crdt, ss_tcp, ss_conn, ss_json, ss_sa_client,
+             ss_dht_client, ss_client]},
   {registered, [ss_sup, ss_registry, ss_state, ss_pubsub, ss_gossip, ss_cluster]},
   %% chumak é arrancado por ss_gossip (ensure_all_started), não aqui.
   {applications, [kernel, stdlib]},
@@ -12,5 +13,9 @@
   %% gossip_port 7100 evita o 7000 (AirPlay Receiver no macOS).
   {env, [{port, 9000}, {zone, undefined}, {gossip_interval, 500},
          {gossip_port, 7100}, {gossip_peers, []},
-         {sa_host, "localhost"}, {sa_port, 9090}]}
+         {sa_host, "localhost"}, {sa_port, 9090},
+         {dht_host, "localhost"}, {dht_port, 7878},
+         %% campos índice usados na ingestão; tem de ser subconjunto dos
+         %% configurados no nó DHT (indexFieldsCsv), senão o INGEST é rejeitado.
+         {dht_index_fields, [<<"zone">>, <<"sensor">>, <<"type">>]}]}
  ]}.

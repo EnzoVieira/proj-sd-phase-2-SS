@@ -124,10 +124,73 @@ handle_event(Map, Session) ->
             false ->
                 error_resp(400, <<"invalid">>);
             true ->
-                ss_state:mark_event(maps:get(device_id, Session)),
+                DeviceId = maps:get(device_id, Session),
+                ss_state:mark_event(DeviceId),
+                %% Ingestão no DHT em background (não bloqueia nem falha o dispositivo).
+                spawn(fun() -> ingest_event(DeviceId, Map) end),
                 ok_resp()
         end
     end).
+
+%% Constrói o evento no formato do DHT (carimbando a zona deste nó) e ingere-o
+%% sob CADA campo índice configurado de que o evento tem valor. Os campos índice
+%% são config do sistema (alinhados com o nó DHT); cada evento tem >= 1.
+ingest_event(DeviceId, Map) ->
+    Event = #{<<"deviceId">>  => DeviceId,
+              <<"type">>      => maps:get(<<"type">>, Map),
+              <<"zone">>      => node_zone(),
+              <<"fields">>    => event_fields(Map),
+              <<"timestamp">> => ms_to_seconds(maps:get(<<"timestamp">>, Map))},
+    IndexFields = application:get_env(ss, dht_index_fields, [<<"zone">>]),
+    lists:foreach(
+        fun(Field) ->
+            case has_index_value(Field, Event) of
+                true  -> ingest_one(Event, Field);
+                false -> ok
+            end
+        end, IndexFields).
+
+ingest_one(Event, Field) ->
+    case ss_dht_client:ingest(Event, Field) of
+        {ok, _}         -> ok;
+        {error, Reason} -> io:format("[ss_conn] ingest DHT (~s) falhou: ~p~n", [Field, Reason])
+    end.
+
+%% O evento tem valor para este campo índice? (deviceId/type/zone estão sempre
+%% presentes; os restantes vêm do mapa fields.)
+has_index_value(Field, Event) ->
+    lists:member(Field, [<<"deviceId">>, <<"type">>, <<"zone">>])
+        orelse maps:is_key(Field, maps:get(<<"fields">>, Event)).
+
+%% Campos índice/extra do evento (tudo menos cmd/type/timestamp), valores em string.
+event_fields(Map) ->
+    Drop = [<<"cmd">>, <<"type">>, <<"timestamp">>],
+    maps:fold(
+        fun(K, V, Acc) ->
+            case lists:member(K, Drop) of
+                true  -> Acc;
+                false -> maps:put(K, to_str(V), Acc)
+            end
+        end, #{}, Map).
+
+%% O DHT espera o timestamp em segundos (Jackson Instant); o evento traz ms.
+ms_to_seconds(Ms) when is_integer(Ms) -> Ms div 1000;
+ms_to_seconds(Ms) when is_float(Ms)   -> trunc(Ms) div 1000.
+
+node_zone() ->
+    case application:get_env(ss, zone, undefined) of
+        undefined           -> atom_to_binary(node(), utf8);
+        Z when is_atom(Z)   -> atom_to_binary(Z, utf8);
+        Z when is_binary(Z) -> Z
+    end.
+
+to_str(V) when is_binary(V)  -> V;
+to_str(V) when is_integer(V) -> integer_to_binary(V);
+to_str(V) when is_float(V)   -> float_to_binary(V, [{decimals, 6}, compact]);
+to_str(true)                 -> <<"true">>;
+to_str(false)                -> <<"false">>;
+to_str(null)                 -> <<"null">>;
+to_str(V)                    -> list_to_binary(io_lib:format("~p", [V])).
 
 %% Queries são GLOBAIS (somam todas as zonas) -> vão ao ss_cluster.
 

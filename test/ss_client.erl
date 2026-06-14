@@ -6,7 +6,7 @@
 -module(ss_client).
 -export([connect/0, connect/1, send/2, close/1,
          auth_producer/3, auth_consumer/3,
-         event/3, online_count/1, online_count_by_type/2,
+         event/3, event/4, online_count/1, online_count_by_type/2,
          is_online/2, active_count/1,
          subscribe/3, unsubscribe/3, recv_push/1, recv_push/2,
          listen/1, aggregate/2]).
@@ -34,11 +34,13 @@ auth_consumer(Socket, User, Password) ->
                    <<"user">> => User,
                    <<"password">> => Password}).
 
-%% Fields = campos índice extra, ex: #{<<"speed">> => 40}.
+%% Fields = campos índice extra, ex: #{<<"temperature">> => 30}.
 event(Socket, Type, Fields) ->
-    Base = #{<<"cmd">> => <<"event">>,
-             <<"type">> => Type,
-             <<"timestamp">> => erlang:system_time(millisecond)},
+    event(Socket, Type, Fields, erlang:system_time(millisecond)).
+
+%% Variante com timestamp explícito (epoch ms) — útil para testar dias concretos.
+event(Socket, Type, Fields, TsMs) ->
+    Base = #{<<"cmd">> => <<"event">>, <<"type">> => Type, <<"timestamp">> => TsMs},
     send(Socket, maps:merge(Base, Fields)).
 
 online_count(Socket) ->
