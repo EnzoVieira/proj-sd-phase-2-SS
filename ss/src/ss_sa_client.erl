@@ -2,7 +2,8 @@
 %%% ss_sa_client — Cliente para o Servidor de Agregação (SA).
 %%% Abre uma ligação TCP por pedido (o SA fecha após responder), envia um
 %%% AggregationRequest em JSON e devolve o AggregationResult descodificado.
-%%% Config (env 'ss'): sa_host, sa_port.
+%%% Config (env 'ss'): sa_host, sa_port (SA por omissão) e sa_zones
+%%% (mapa zona => {Host, Port} para rotear por zona — localidade de dados).
 %%%-------------------------------------------------------------------
 -module(ss_sa_client).
 -export([aggregate/1]).
@@ -11,8 +12,7 @@
 
 %% aggregate(RequestMap) -> {ok, ResultMap} | {error, Reason}
 aggregate(Request) ->
-    Host = application:get_env(ss, sa_host, "localhost"),
-    Port = application:get_env(ss, sa_port, 9090),
+    {Host, Port} = resolve_endpoint(Request),
     case gen_tcp:connect(Host, Port,
                          [binary, {packet, line}, {active, false}], ?TIMEOUT) of
         {ok, Socket} ->
@@ -22,6 +22,25 @@ aggregate(Request) ->
         {error, Reason} ->
             {error, {connect, Reason}}
     end.
+
+%% Escolhe o SA: se o pedido filtra por zona (indexField="zone") e essa zona
+%% tem entrada em sa_zones, usa esse SA (localidade); senão, o SA por omissão.
+resolve_endpoint(Request) ->
+    case maps:get(<<"indexField">>, Request, undefined) of
+        <<"zone">> ->
+            Zone  = maps:get(<<"indexValue">>, Request, undefined),
+            Zones = application:get_env(ss, sa_zones, #{}),
+            case maps:find(Zone, Zones) of
+                {ok, {Host, Port}} -> {Host, Port};
+                error              -> default_endpoint()
+            end;
+        _ ->
+            default_endpoint()
+    end.
+
+default_endpoint() ->
+    {application:get_env(ss, sa_host, "localhost"),
+     application:get_env(ss, sa_port, 9090)}.
 
 query(Socket, Request) ->
     case gen_tcp:send(Socket, [ss_json:encode(Request), "\n"]) of

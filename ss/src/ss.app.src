@@ -13,7 +13,10 @@
   %% gossip_port 7100 evita o 7000 (AirPlay Receiver no macOS).
   {env, [{port, 9000}, {zone, undefined}, {gossip_interval, 500},
          {gossip_port, 7100}, {gossip_peers, []},
-         {sa_host, "localhost"}, {sa_port, 9090},
+         %% sa_host/sa_port = SA por omissão; sa_zones roteia agregações
+         %% filtradas por zona (indexField="zone") para o SA dessa zona
+         %% (ex.: #{<<"north">> => {"localhost",9090}}); vazio => sempre o default.
+         {sa_host, "localhost"}, {sa_port, 9090}, {sa_zones, #{}},
          {dht_host, "localhost"}, {dht_port, 7878},
          %% campos índice usados na ingestão; tem de ser subconjunto dos
          %% configurados no nó DHT (indexFieldsCsv), senão o INGEST é rejeitado.

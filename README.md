@@ -148,6 +148,13 @@ CS = ss_client:connect(9002), ss_client:auth_consumer(CS, <<"bob">>, <<"bob123">
 ss_client:aggregate(CS, D#{<<"type">> => <<"SUM">>, <<"indexValue">> => <<"south">>, <<"k2">> => <<"temperature">>}).
 ```
 
+> **Roteamento por zona (localidade).** Para correr **um SA por zona**, arranca um 2º SA
+> (`cd sa && java -cp "target/classes:$(cat cp.txt)" pt.ua.SaMain south 9092 localhost 9091`) e,
+> em cada nó SS, em vez de `sa_port`, define o mapa
+> `application:set_env(ss, sa_zones, #{<<"north">> => {"localhost",9090}, <<"south">> => {"localhost",9092}})`.
+> Agregações com `indexField="zone"` passam a ir para o SA da zona pedida; zonas não mapeadas
+> (ou outros `indexField`) caem no SA por omissão (`sa_host`/`sa_port`).
+
 **Critério de sucesso:** `online_count` = 2 a partir de qualquer nó SS (estado distribuído), e
 cada agregação devolve os mesmos números que o cliente de referência do SA para a respetiva
 zona (`cd sa && java -cp "target/classes:$(cat cp.txt)" pt.ua.FakeConsumerSS localhost 9090 north` / `south`).
