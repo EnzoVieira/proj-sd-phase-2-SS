@@ -148,11 +148,14 @@ def wait_port(port: int, host: str = "localhost",
 
 def _find(name: str) -> str:
     for n in [name, name + ".cmd", name + ".bat"]:
-        if shutil.which(n): return n
+        found = shutil.which(n)
+        if found:
+            return found   # caminho absoluto — necessário no Windows para .cmd/.bat
     return name
 
 MVN  = _find("mvn")
 ERL  = _find("erl")
+ERLC = _find("erlc")
 MAKE = _find("make")
 
 # ══════════════════════════════════════════════════════════════════════
@@ -171,11 +174,58 @@ def build_java(pom: Path, label: str) -> bool:
     return True
 
 def build_erlang() -> bool:
+    """Compila SS + chumak invocando erlc diretamente (sem make, funciona em Windows)."""
     log("A compilar SS (Erlang + chumak)...")
-    r = subprocess.run([MAKE, "-C", str(SS_DIR)], capture_output=True, text=True)
+
+    chumak_dir  = SS_DIR / "deps" / "chumak"
+    chumak_ebin = chumak_dir / "ebin"
+    chumak_src  = chumak_dir / "src"
+    chumak_inc  = chumak_dir / "include"
+    ebin_dir    = SS_DIR / "ebin"
+    src_dir     = SS_DIR / "src"
+    test_dir    = SS_DIR / "test"
+
+    chumak_ebin.mkdir(parents=True, exist_ok=True)
+    ebin_dir.mkdir(parents=True, exist_ok=True)
+
+    # Compila chumak apenas se ainda não estiver compilado
+    if not (chumak_ebin / "chumak.app").exists():
+        erl_files = sorted(chumak_src.glob("*.erl"))
+        if not erl_files:
+            fail("Fontes do chumak não encontradas em deps/chumak/src/")
+            return False
+        r = subprocess.run(
+            [ERLC, "-I", str(chumak_inc), "-o", str(chumak_ebin)]
+            + [str(f) for f in erl_files],
+            capture_output=True, text=True, cwd=SS_DIR)
+        if r.returncode != 0:
+            fail(f"Falha ao compilar chumak:\n{r.stderr[-500:]}")
+            return False
+        app_src = chumak_src / "chumak.app.src"
+        if app_src.exists():
+            shutil.copy2(app_src, chumak_ebin / "chumak.app")
+
+    # Copia o ficheiro de aplicação OTP
+    app_src = src_dir / "ss.app.src"
+    if app_src.exists():
+        shutil.copy2(app_src, ebin_dir / "ss.app")
+
+    # Compila módulos SS (src/ + test/ se existir)
+    erl_files = sorted(src_dir.glob("*.erl"))
+    if test_dir.exists():
+        erl_files += sorted(test_dir.glob("*.erl"))
+    if not erl_files:
+        fail("Nenhum ficheiro .erl encontrado em ss/src/")
+        return False
+
+    r = subprocess.run(
+        [ERLC, "-Wall", "-pa", str(chumak_ebin),
+         "-o", str(ebin_dir)] + [str(f) for f in erl_files],
+        capture_output=True, text=True, cwd=SS_DIR)
     if r.returncode != 0:
         fail(f"Falha ao compilar SS:\n{r.stderr[-500:]}")
         return False
+
     ok("SS compilado")
     return True
 
