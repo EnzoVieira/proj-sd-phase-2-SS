@@ -141,7 +141,9 @@ ingest_event(DeviceId, Map) ->
               <<"zone">>      => node_zone(),
               <<"fields">>    => event_fields(Map),
               <<"timestamp">> => ms_to_seconds(maps:get(<<"timestamp">>, Map))},
-    IndexFields = application:get_env(ss, dht_index_fields, [<<"zone">>]),
+    %% Normaliza para binário: o config pode trazer átomos (zone) ou listas ("zone").
+    RawFields  = application:get_env(ss, dht_index_fields, [<<"zone">>]),
+    IndexFields = [to_bin(F) || F <- RawFields],
     lists:foreach(
         fun(Field) ->
             case has_index_value(Field, Event) of
@@ -161,6 +163,11 @@ ingest_one(Event, Field) ->
 has_index_value(Field, Event) ->
     lists:member(Field, [<<"deviceId">>, <<"type">>, <<"zone">>])
         orelse maps:is_key(Field, maps:get(<<"fields">>, Event)).
+
+%% Normaliza campos índice para binário independentemente do tipo vindo do config.
+to_bin(F) when is_binary(F) -> F;
+to_bin(F) when is_atom(F)   -> atom_to_binary(F, utf8);
+to_bin(F) when is_list(F)   -> list_to_binary(F).
 
 %% Campos índice/extra do evento (tudo menos cmd/type/timestamp), valores em string.
 event_fields(Map) ->
