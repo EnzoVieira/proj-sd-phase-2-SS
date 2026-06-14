@@ -19,8 +19,9 @@
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
 
-publish(Global) ->
-    gen_server:cast(?MODULE, {publish, Global}).
+%% Payload = {Global(ss_crdt), Reg(ss_reg_crdt)} (anti-entropia: estado completo).
+publish(Payload) ->
+    gen_server:cast(?MODULE, {publish, Payload}).
 
 %%====================================================================
 %% Callbacks
@@ -48,8 +49,8 @@ init([]) ->
     io:format("[ss_gossip] PUB na porta ~p, peers=~p~n", [Port, Peers]),
     {ok, #{pub => Pub, sub => Sub}}.
 
-handle_cast({publish, Global}, State) ->
-    catch chumak:send(maps:get(pub, State), term_to_binary(Global)),
+handle_cast({publish, Payload}, State) ->
+    catch chumak:send(maps:get(pub, State), term_to_binary(Payload)),
     {noreply, State};
 handle_cast(_Msg, State) ->
     {noreply, State}.
@@ -67,9 +68,10 @@ handle_info(_Msg, State) ->
 recv_loop(Sub) ->
     case chumak:recv(Sub) of
         {ok, Bin} ->
-            %% [safe]: não cria átomos a partir de dados da rede (zonas em binary).
-            Global = binary_to_term(Bin, [safe]),
-            gen_server:cast(ss_cluster, {merge, Global}),
+            %% [safe]: não cria átomos a partir de dados da rede (zonas/users em binary).
+            %% Payload = {Global(ss_crdt), Reg(ss_reg_crdt)}.
+            Payload = binary_to_term(Bin, [safe]),
+            gen_server:cast(ss_cluster, {merge, Payload}),
             recv_loop(Sub);
         {error, Reason} ->
             io:format("[ss_gossip] recv erro: ~p~n", [Reason]),

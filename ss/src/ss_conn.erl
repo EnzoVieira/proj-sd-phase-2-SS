@@ -50,6 +50,7 @@ dispatch(Socket, Map, Session) ->
 %% A maioria dos handlers ignora o Socket; subscribe/unsubscribe precisam dele.
 route(_S, <<"auth_producer">>, Map, Session)        -> handle_auth_producer(Map, Session);
 route(_S, <<"auth_consumer">>, Map, Session)        -> handle_auth_consumer(Map, Session);
+route(_S, <<"register_consumer">>, Map, Session)    -> handle_register_consumer(Map, Session);
 route(_S, <<"event">>, Map, Session)                -> handle_event(Map, Session);
 route(_S, <<"online_count">>, Map, Session)         -> handle_online_count(Map, Session);
 route(_S, <<"online_count_by_type">>, Map, Session) -> handle_online_count_by_type(Map, Session);
@@ -102,7 +103,10 @@ handle_auth_consumer(Map, Session) ->
                 false ->
                     {error_resp(400, <<"invalid">>), Session};
                 true ->
-                    case ss_registry:authenticate_consumer(User, Password) of
+                    %% Aceita a seed estática OU o registo dinâmico replicado (CRDT).
+                    Ok = ss_registry:authenticate_consumer(User, Password)
+                         orelse ss_cluster:authenticate_consumer(User, Password),
+                    case Ok of
                         true ->
                             NewSession = Session#{authenticated := true,
                                                   role := consumer,
@@ -111,6 +115,35 @@ handle_auth_consumer(Map, Session) ->
                         false ->
                             {error_resp(401, <<"auth_failed">>), Session}
                     end
+            end
+    end.
+
+%% register_consumer: cria a credencial (replicada por CRDT); NÃO autentica.
+%% Verifica duplicado contra a seed estática e o CRDT (idempotente: mesma senha
+%% -> ok; senha diferente -> 409). Orquestrado aqui para não aninhar gen_servers.
+handle_register_consumer(Map, Session) ->
+    case maps:get(authenticated, Session) of
+        true ->
+            {error_resp(409, <<"already_authenticated">>), Session};
+        false ->
+            User     = maps:get(<<"user">>, Map, undefined),
+            Password = maps:get(<<"password">>, Map, undefined),
+            case is_binary(User) andalso is_binary(Password) of
+                false ->
+                    {error_resp(400, <<"invalid">>), Session};
+                true ->
+                    {do_register_consumer(User, Password), Session}
+            end
+    end.
+
+do_register_consumer(User, Password) ->
+    case ss_registry:consumer_password(User) of
+        {ok, Password} -> ok_resp();                         %% seed, mesma senha
+        {ok, _Other}   -> error_resp(409, <<"already_registered">>);
+        error ->
+            case ss_cluster:register_consumer(User, Password) of
+                ok                          -> ok_resp();
+                {error, already_registered} -> error_resp(409, <<"already_registered">>)
             end
     end.
 

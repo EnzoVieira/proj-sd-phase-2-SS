@@ -45,7 +45,8 @@ src/        módulos do servidor
   ss_state              estado local: online/ativo (ETS + monitor)
   ss_pubsub             notificações pub/sub (push para consumidores)
   ss_crdt               estrutura replicável + merge (puro)
-  ss_cluster            réplica do estado global + gossip entre nós
+  ss_reg_crdt           registo de consumidores (CRDT grow-only, puro)
+  ss_cluster            réplica do estado global + registo + gossip entre nós
   ss_gossip             transporte de gossip via 0MQ/chumak (SS↔SS)
   ss_sa_client          cliente do Servidor de Agregação (proxy de agregações)
   ss_dht_client         cliente do DHT/AST (ingestão de eventos)
@@ -289,6 +290,7 @@ Pedido = uma linha JSON com campo `cmd`. Respostas:
 | `cmd` | Papel | Campos | Resultado |
 |---|---|---|---|
 | `auth_producer` | dispositivo | `device`, `password` | ok |
+| `register_consumer` | (novo cliente) | `user`, `password` | ok |
 | `auth_consumer` | consumidor | `user`, `password` | ok |
 | `event` | dispositivo | `type`, `timestamp`(ms) + campos índice | ok |
 
@@ -305,6 +307,14 @@ convertido para segundos; campos como strings), indexado sob **cada** campo índ
 
 `aggregate` é reencaminhado para o **SA** (`type` ∈ `COUNT/SUM/MAX/MIN/SUM_PRODUCT`; `k2` é o
 campo numérico, `k3` o 2º fator para `SUM_PRODUCT`). Se o SA estiver indisponível: `code 502`.
+
+`register_consumer` cria a credencial de um **consumidor** em runtime, guardada num **CRDT
+grow-only** (`ss_reg_crdt`) **replicado entre nós** pelo gossip — qualquer nó passa a poder
+autenticar esse consumidor, e o registo sobrevive à queda de nós (tolerante a faltas). É
+idempotente: re-registar com a mesma senha → ok; senha diferente → `code 409`. Os **dispositivos**
+mantêm-se pré-carregados (estáticos, `priv/devices.json`); os consumidores em `priv/consumers.json`
+servem de *seed* e o `auth_consumer` aceita a seed **ou** os registos dinâmicos. (Não autentica a
+sessão: o cliente faz `auth_consumer` a seguir; convergência entre nós até ~1 tick de gossip.)
 
 `event` do `subscribe`: `type_empty` (com `type`), `record` (`type` ou `"any"`),
 `percentage` (`type` ignorado).

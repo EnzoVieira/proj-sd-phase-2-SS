@@ -9,7 +9,7 @@
 
 -export([start_link/0, start_link/2,
          authenticate_device/2, device_type/1,
-         authenticate_consumer/2]).
+         authenticate_consumer/2, consumer_password/1]).
 -export([init/1, handle_call/3, handle_cast/2]).
 
 -define(SERVER, ?MODULE).
@@ -32,6 +32,10 @@ device_type(Id) ->
 
 authenticate_consumer(User, Password) ->
     gen_server:call(?SERVER, {auth_consumer, User, Password}).
+
+%% Senha de um consumidor da seed estática. {ok, Password} | error.
+consumer_password(User) ->
+    gen_server:call(?SERVER, {consumer_password, User}).
 
 %%====================================================================
 %% Callbacks
@@ -70,7 +74,10 @@ handle_call({auth_consumer, User, Password}, _From, State) ->
             {ok, Password} -> true;
             _              -> false
         end,
-    {reply, Reply, State}.
+    {reply, Reply, State};
+
+handle_call({consumer_password, User}, _From, State) ->
+    {reply, maps:find(User, maps:get(consumers, State)), State}.
 
 handle_cast(_Msg, State) ->
     {noreply, State}.

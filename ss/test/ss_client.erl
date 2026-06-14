@@ -5,7 +5,7 @@
 %%%-------------------------------------------------------------------
 -module(ss_client).
 -export([connect/0, connect/1, send/2, close/1,
-         auth_producer/3, auth_consumer/3,
+         auth_producer/3, auth_consumer/3, register_consumer/3,
          event/3, event/4, online_count/1, online_count_by_type/2,
          is_online/2, active_count/1,
          subscribe/3, unsubscribe/3, recv_push/1, recv_push/2,
@@ -31,6 +31,11 @@ auth_producer(Socket, Device, Password) ->
 
 auth_consumer(Socket, User, Password) ->
     send(Socket, #{<<"cmd">> => <<"auth_consumer">>,
+                   <<"user">> => User,
+                   <<"password">> => Password}).
+
+register_consumer(Socket, User, Password) ->
+    send(Socket, #{<<"cmd">> => <<"register_consumer">>,
                    <<"user">> => User,
                    <<"password">> => Password}).
 

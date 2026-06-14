@@ -3,8 +3,8 @@
  [{description, "Servidor de Sessao (SS)"},
   {vsn, "0.1.0"},
   {modules, [ss_app, ss_sup, ss_registry, ss_state, ss_pubsub, ss_gossip,
-             ss_cluster, ss_crdt, ss_tcp, ss_conn, ss_json, ss_sa_client,
-             ss_dht_client, ss_client]},
+             ss_cluster, ss_crdt, ss_reg_crdt, ss_tcp, ss_conn, ss_json,
+             ss_sa_client, ss_dht_client, ss_client]},
   {registered, [ss_sup, ss_registry, ss_state, ss_pubsub, ss_gossip, ss_cluster]},
   %% chumak é arrancado por ss_gossip (ensure_all_started), não aqui.
   {applications, [kernel, stdlib]},

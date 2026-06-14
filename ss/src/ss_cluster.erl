@@ -9,7 +9,8 @@
 
 -export([start_link/0,
          count_online/0, count_online_by_type/1, is_online/1, count_active/0,
-         zone_online_count/0, global_online_count/0, dump/0]).
+         zone_online_count/0, global_online_count/0, dump/0,
+         register_consumer/2, authenticate_consumer/2]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
 
 %%====================================================================
@@ -31,6 +32,12 @@ global_online_count()       -> gen_server:call(?MODULE, count_online).
 %% Depuração: ver o estado global completo.
 dump()                      -> gen_server:call(?MODULE, dump).
 
+%% Registo de consumidores (CRDT grow-only replicado pelo gossip).
+register_consumer(User, Password) ->
+    gen_server:call(?MODULE, {register_consumer, User, Password}).
+authenticate_consumer(User, Password) ->
+    gen_server:call(?MODULE, {authenticate_consumer, User, Password}).
+
 %%====================================================================
 %% Callbacks
 %%====================================================================
@@ -45,7 +52,8 @@ init([]) ->
     Interval = application:get_env(ss, gossip_interval, 500),
     io:format("[ss_cluster] zona=~p~n", [Zone]),
     State = #{zone => Zone, interval => Interval,
-              global => ss_crdt:new(), version => 0, prev_pct => 0},
+              global => ss_crdt:new(), reg => ss_reg_crdt:new(),
+              version => 0, prev_pct => 0},
     schedule_tick(Interval),
     {ok, State}.
 
@@ -62,12 +70,29 @@ handle_call(zone_online_count, _From, State) ->
     Zone = maps:get(zone, State),
     {reply, ss_crdt:zone_online_count(fresh_global(State), Zone), State};
 handle_call(dump, _From, State) ->
-    {reply, fresh_global(State), State}.
+    {reply, fresh_global(State), State};
 
-%% Gossip recebido: merge (o total global pode mudar -> reavaliar percentagem).
-handle_cast({merge, Remote}, State) ->
+%% Registo idempotente: mesma senha -> ok; senha diferente -> já registado.
+handle_call({register_consumer, User, Password}, _From, State) ->
+    Reg = maps:get(reg, State),
+    case ss_reg_crdt:lookup(Reg, User) of
+        {ok, Password} -> {reply, ok, State};
+        {ok, _Other}   -> {reply, {error, already_registered}, State};
+        error          -> {reply, ok, State#{reg := ss_reg_crdt:add(Reg, User, Password)}}
+    end;
+handle_call({authenticate_consumer, User, Password}, _From, State) ->
+    Reply = case ss_reg_crdt:lookup(maps:get(reg, State), User) of
+                {ok, Password} -> true;
+                _              -> false
+            end,
+    {reply, Reply, State}.
+
+%% Gossip recebido: merge dos dois CRDTs (online/active + registo).
+%% O total global pode mudar -> reavaliar percentagem.
+handle_cast({merge, {Remote, RemoteReg}}, State) ->
     Global2 = ss_crdt:merge(maps:get(global, State), Remote),
-    {noreply, maybe_publish_percentage(State#{global := Global2})};
+    Reg2    = ss_reg_crdt:merge(maps:get(reg, State), RemoteReg),
+    {noreply, maybe_publish_percentage(State#{global := Global2, reg := Reg2})};
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
@@ -77,7 +102,7 @@ handle_info(tick, State) ->
     Version = maps:get(version, State) + 1,
     LocalZone = local_zone_state(Version),
     Global2   = ss_crdt:set_zone(maps:get(global, State), Zone, LocalZone),
-    ss_gossip:publish(Global2),
+    ss_gossip:publish({Global2, maps:get(reg, State)}),
     schedule_tick(maps:get(interval, State)),
     {noreply, maybe_publish_percentage(State#{global := Global2, version := Version})};
 handle_info(_Msg, State) ->
